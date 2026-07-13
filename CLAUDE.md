@@ -1,13 +1,13 @@
 # Routine: Registro semanal Meta Ads → Excel OneDrive
 
 ## Objetivo
-Al ejecutarse en cualquier día, registrar en la hoja `REGISTRO_SEMANAL` del Excel de OneDrive la inversión y leads de Meta Ads para la semana actual (lunes → hoy) y, si falta, también la semana anterior completa (lunes → domingo). Una fila por campaña por semana.
+Al ejecutarse en cualquier día, registrar en la hoja `REGISTRO_SEMANAL` del Excel de OneDrive la inversión, leads y conversaciones de Meta Ads para la semana actual (lunes → hoy) y, si falta, también la semana anterior completa (lunes → domingo). Una fila por campaña por semana. Campañas de leads (`OUTCOME_LEADS`) registran leads; campañas de WhatsApp (`OUTCOME_ENGAGEMENT`) registran conversaciones iniciadas.
 
 ## Reglas
 
 1. **Autonomía total**: no preguntes, no pidas confirmación, no esperes input. Si algo falla, detente con mensaje claro y exit ≠ 0.
 2. **Una fila por campaña por semana** — nunca agrupar campañas aunque compartan código.
-3. **Idempotencia por campaña**: si ya existe una fila con el mismo `ID_Campana` (nombre completo) + `Semana_ISO`, actualiza `Inversion_USD` y `Leads`. No insertes duplicado.
+3. **Idempotencia por campaña**: si ya existe una fila con el mismo `ID_Campana` (nombre completo) + `Semana_ISO`, actualiza `Inversion_USD`, `Leads` y `Conversaciones`. No insertes duplicado.
 4. **Semana anterior**: solo verifica y rellena la semana inmediatamente anterior (W-1). No retrocedas más.
 5. **Filtrar campañas sin código**: si el nombre de la campaña no contiene el patrón `PE.EI.XX-XX.X` o `CE.EI.XX-XX.X`, omítela silenciosamente.
 6. **CPL siempre como fórmula**, nunca valor literal.
@@ -77,7 +77,7 @@ Usa Meta MCP `ads_get_ad_entities`:
 ```
 ad_account_id: env META_AD_ACCOUNT_ID
 level: "campaign"
-fields: ["id", "name", "amount_spent", "lead"]
+fields: ["id", "name", "objective", "amount_spent", "lead", "results"]
 filtering: [{"field": "campaign.amount_spent", "operator": "GREATER_THAN", "value": ["0"]}]
 time_range: {"since": "semana_anterior_lunes", "until": "semana_anterior_domingo"}
 ```
@@ -85,10 +85,12 @@ time_range: {"since": "semana_anterior_lunes", "until": "semana_anterior_domingo
 **2b. Filtrar y procesar campañas de la semana anterior**
 
 Por cada campaña en los resultados:
-- Si `amount_spent` = 0 y `lead` = 0 → omitir
+- Si `amount_spent` = 0 y `lead` = 0 y `results` = 0 → omitir
 - Extraer `codigo` con regex `(PE\.EI\.\d+-\d+\.\d+|CE\.EI\.\d+-\d+\.\d+)` del campo `name`
 - Si no hay coincidencia con PE.EI o CE.EI → omitir silenciosamente
 - `id_campana` = `name` completo tal como viene de Meta
+- Si `objective` == `OUTCOME_ENGAGEMENT` → campaña WhatsApp: `leads = 0`, `conversaciones` = valor numérico de `results`
+- Si `objective` == `OUTCOME_LEADS` → campaña de leads: `leads` = valor de `lead`, `conversaciones = 0`
 
 **2c. Escribir filas de la semana anterior**
 
@@ -108,7 +110,7 @@ Usa Meta MCP `ads_get_ad_entities`:
 ```
 ad_account_id: env META_AD_ACCOUNT_ID
 level: "campaign"
-fields: ["id", "name", "amount_spent", "lead"]
+fields: ["id", "name", "objective", "amount_spent", "lead", "results"]
 filtering: [{"field": "campaign.amount_spent", "operator": "GREATER_THAN", "value": ["0"]}]
 time_range: {"since": "semana_actual_lunes", "until": "semana_actual_hasta"}
 ```
@@ -116,9 +118,11 @@ time_range: {"since": "semana_actual_lunes", "until": "semana_actual_hasta"}
 **3b. Filtrar campañas**
 
 Por cada campaña:
-- Si `amount_spent` = 0 y `lead` = 0 → omitir
+- Si `amount_spent` = 0 y `lead` = 0 y `results` = 0 → omitir
 - Extraer `codigo` con regex del campo `name` → si no tiene PE.EI o CE.EI → omitir
 - `id_campana` = `name` completo
+- Si `objective` == `OUTCOME_ENGAGEMENT` → campaña WhatsApp: `leads = 0`, `conversaciones` = valor numérico de `results`
+- Si `objective` == `OUTCOME_LEADS` → campaña de leads: `leads` = valor de `lead`, `conversaciones = 0`
 
 **3c. Decidir: ¿insertar o actualizar?**
 
@@ -127,9 +131,9 @@ Para cada campaña válida, buscar en `filas_existentes` si existe una fila dond
 - Columna E (`ID_Campana`) == `campaign_name` (exacto)
 
 **Si la fila EXISTE → ACTUALIZAR**
-Usa Composio `EXCEL_UPDATE_RANGE` solo en las celdas G e H de esa fila:
-- `address`: `G{n}:H{n}` (n = número de fila Excel de la coincidencia)
-- `values`: [[spend, leads]]
+Usa Composio `EXCEL_UPDATE_RANGE` en las celdas G, H y K de esa fila:
+- `address`: `G{n}:K{n}` (n = número de fila Excel de la coincidencia)
+- `values`: [[spend, leads, fórmula_CPL, comentario, conversaciones]]
 
 **Si la fila NO EXISTE → INSERTAR**
 Insertar nueva fila (ver estructura abajo) en `primera_fila_vacia`.
@@ -139,7 +143,7 @@ Incrementar `ultimo_id` y `primera_fila_vacia`.
 
 ## Estructura de filas
 
-Cada fila nueva a insertar tiene 10 valores (columnas A-J):
+Cada fila nueva a insertar tiene 11 valores (columnas A-K):
 
 | Col | Campo | Valor |
 |-----|-------|-------|
@@ -150,13 +154,14 @@ Cada fila nueva a insertar tiene 10 valores (columnas A-J):
 | E | `ID_Campana` | nombre completo de la campaña en Meta |
 | F | `Canal` | `"Meta"` |
 | G | `Inversion_USD` | spend (float, 2 decimales) |
-| H | `Leads` | leads (entero) |
-| I | `CPL_USD` | fórmula `=IF(H{n}=0,"-",G{n}/H{n})` donde n = fila Excel |
+| H | `Leads` | leads (entero, 0 para campañas WhatsApp) |
+| I | `CPL_USD` | fórmula `=IF((H{n}+K{n})=0,"-",G{n}/(H{n}+K{n}))` donde n = fila Excel |
 | J | `Comentario` | `""` |
+| K | `Conversaciones` | conversaciones iniciadas (entero, 0 para campañas de leads) |
 
 Escribir con Composio `EXCEL_UPDATE_RANGE`:
 - `worksheet_id`: `REGISTRO_SEMANAL`
-- `address`: `A{primera_fila_vacia}:J{primera_fila_vacia}` (una fila a la vez) o en bloque si son varias filas consecutivas
+- `address`: `A{primera_fila_vacia}:K{primera_fila_vacia}` (una fila a la vez) o en bloque si son varias filas consecutivas
 
 ---
 
