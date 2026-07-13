@@ -3,7 +3,7 @@
 ## Objetivo
 Al ejecutarse en cualquier día, registrar en la hoja `REGISTRO_SEMANAL` del Excel de OneDrive la inversión, leads y conversaciones de Meta Ads para la semana actual (lunes → hoy) y, si falta, también la semana anterior completa (lunes → domingo). Una fila por campaña por semana. Campañas de leads (`OUTCOME_LEADS`) registran leads; campañas de WhatsApp (`OUTCOME_ENGAGEMENT`) registran conversaciones iniciadas.
 
-Como métrica norte, también cuenta los **leads calientes** de la semana desde los archivos Excel de seguimiento de cada campaña en la carpeta MKT CODE de OneDrive. Un lead caliente es cualquier registro en la hoja `CALIENTE` de esos archivos cuya fecha caiga dentro del periodo procesado.
+Como métrica norte, también cuenta los **leads calientes** de la semana desde los archivos Excel de seguimiento de cada campaña en la carpeta MKT CODE de OneDrive. Un lead caliente es cualquier registro en la hoja `CALIENTE` de esos archivos cuya fecha caiga dentro del periodo procesado. Los leads calientes se registran en la hoja `REGISTRO_CALIENTES` (una fila por `Codigo_Producto` + semana), **no** en `REGISTRO_SEMANAL`, porque el seguimiento es por producto y duplicarlo en cada variante de campaña inflaría las sumas.
 
 ## Reglas
 
@@ -195,26 +195,38 @@ Una vez detectado el formato, contar las filas (excluyendo el encabezado) donde 
 - Para semana actual: `semana_actual_lunes` ≤ Fecha ≤ `semana_actual_hasta`
 - Para semana anterior (si aplica): `semana_anterior_lunes` ≤ Fecha ≤ `semana_anterior_domingo`
 
-**4d. Escribir Leads_Calientes en columna L**
+**4d. Escribir en la hoja REGISTRO_CALIENTES**
 
-Para cada fila de `REGISTRO_SEMANAL` cuyo `Codigo_Producto` coincide con el código procesado y pertenece al periodo calculado:
+Los leads calientes van a una hoja separada, `REGISTRO_CALIENTES`, con **una fila por `Codigo_Producto` + semana** (no por campaña — el archivo de seguimiento es por producto y repetir el valor en cada variante duplicaría las sumas).
 
-Usa Composio `EXCEL_UPDATE_RANGE`:
+Primero leer el estado de la hoja con `EXCEL_GET_WORKSHEET_USED_RANGE` (`worksheet_id: "REGISTRO_CALIENTES"`) y construir `filas_calientes_existentes` y `primera_fila_vacia_calientes`.
+
+Estructura de la hoja `REGISTRO_CALIENTES` (columnas A-E):
+
+| Col | Campo | Valor |
+|-----|-------|-------|
+| A | `Fecha_Semana` | serial Excel del lunes de la semana (entero) |
+| B | `Semana_ISO` | `"2026-W29"` (string) |
+| C | `Codigo_Producto` | código del producto |
+| D | `Leads_Calientes` | conteo (entero) |
+| E | `Archivo` | nombre del archivo en MKT CODE usado; `"NO ENCONTRADO"` si no existe |
+
+**Idempotencia**: si ya existe una fila con el mismo `Codigo_Producto` (col C) + `Semana_ISO` (col B), actualizar solo la columna D (`D{n}`). Si no existe, insertar fila nueva en `primera_fila_vacia_calientes` con `EXCEL_UPDATE_RANGE`:
 ```
 item_id: env ONEDRIVE_ITEM_ID
 drive_id: env ONEDRIVE_DRIVE_ID
-worksheet_id: "REGISTRO_SEMANAL"
-address: "L{n}"
-values: [[leads_calientes]]
+worksheet_id: "REGISTRO_CALIENTES"
+address: "A{n}:E{n}"
+values: [[fecha_serial, semana_iso, codigo, leads_calientes, archivo]]
 ```
 
-Escribir de forma secuencial, una celda a la vez. Un mismo valor de leads_calientes aplica a **todas** las filas que comparten el mismo `Codigo_Producto` y semana (porque el archivo de seguimiento es por producto, no por variante de campaña).
+Escritura secuencial, una fila a la vez.
 
 ---
 
 ## Estructura de filas
 
-Cada fila nueva a insertar tiene 12 valores (columnas A-L):
+Cada fila nueva a insertar tiene 11 valores (columnas A-K):
 
 | Col | Campo | Valor |
 |-----|-------|-------|
@@ -229,11 +241,10 @@ Cada fila nueva a insertar tiene 12 valores (columnas A-L):
 | I | `Conversaciones` | conversaciones iniciadas (entero, 0 para campañas de leads) |
 | J | `CPL_USD` | fórmula `=IF((H{n}+I{n})=0,"-",G{n}/(H{n}+I{n}))` donde n = fila Excel |
 | K | `Comentario` | `""` |
-| L | `Leads_Calientes` | `0` al insertar (se actualiza en PASO 4) |
 
 Escribir con Composio `EXCEL_UPDATE_RANGE`:
 - `worksheet_id`: `REGISTRO_SEMANAL`
-- `address`: `A{primera_fila_vacia}:L{primera_fila_vacia}` (una fila a la vez)
+- `address`: `A{primera_fila_vacia}:K{primera_fila_vacia}` (una fila a la vez)
 
 ---
 
