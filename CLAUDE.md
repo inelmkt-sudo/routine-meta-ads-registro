@@ -131,9 +131,9 @@ Para cada campaña válida, buscar en `filas_existentes` si existe una fila dond
 - Columna E (`ID_Campana`) == `campaign_name` (exacto)
 
 **Si la fila EXISTE → ACTUALIZAR**
-Usa Composio `EXCEL_UPDATE_RANGE` en las celdas G, H y K de esa fila:
-- `address`: `G{n}:K{n}` (n = número de fila Excel de la coincidencia)
-- `values`: [[spend, leads, fórmula_CPL, comentario, conversaciones]]
+Usa Composio `EXCEL_UPDATE_RANGE` en las celdas G, H e I de esa fila:
+- `address`: `G{n}:I{n}` (n = número de fila Excel de la coincidencia)
+- `values`: [[spend, leads, conversaciones]]
 
 **Si la fila NO EXISTE → INSERTAR**
 Insertar nueva fila (ver estructura abajo) en `primera_fila_vacia`.
@@ -155,9 +155,9 @@ Cada fila nueva a insertar tiene 11 valores (columnas A-K):
 | F | `Canal` | `"Meta"` |
 | G | `Inversion_USD` | spend (float, 2 decimales) |
 | H | `Leads` | leads (entero, 0 para campañas WhatsApp) |
-| I | `CPL_USD` | fórmula `=IF((H{n}+K{n})=0,"-",G{n}/(H{n}+K{n}))` donde n = fila Excel |
-| J | `Comentario` | `""` |
-| K | `Conversaciones` | conversaciones iniciadas (entero, 0 para campañas de leads) |
+| I | `Conversaciones` | conversaciones iniciadas (entero, 0 para campañas de leads) |
+| J | `CPL_USD` | fórmula `=IF((H{n}+I{n})=0,"-",G{n}/(H{n}+I{n}))` donde n = fila Excel |
+| K | `Comentario` | `""` |
 
 Escribir con Composio `EXCEL_UPDATE_RANGE`:
 - `worksheet_id`: `REGISTRO_SEMANAL`
