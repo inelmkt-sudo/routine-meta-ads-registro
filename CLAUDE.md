@@ -3,6 +3,8 @@
 ## Objetivo
 Al ejecutarse en cualquier día, registrar en la hoja `REGISTRO_SEMANAL` del Excel de OneDrive la inversión, leads y conversaciones de Meta Ads para la semana actual (lunes → hoy) y, si falta, también la semana anterior completa (lunes → domingo). Una fila por campaña por semana. Campañas de leads (`OUTCOME_LEADS`) registran leads; campañas de WhatsApp (`OUTCOME_ENGAGEMENT`) registran conversaciones iniciadas.
 
+Como métrica norte, también cuenta los **leads calientes** de la semana desde los archivos Excel de seguimiento de cada campaña en la carpeta MKT CODE de OneDrive. Un lead caliente es cualquier registro en la hoja `CALIENTE` de esos archivos cuya fecha caiga dentro del periodo procesado.
+
 ## Reglas
 
 1. **Autonomía total**: no preguntes, no pidas confirmación, no esperes input. Si algo falla, detente con mensaje claro y exit ≠ 0.
@@ -24,6 +26,8 @@ Al ejecutarse en cualquier día, registrar en la hoja `REGISTRO_SEMANAL` del Exc
 | Leer hoja `REGISTRO_SEMANAL` | Composio `EXCEL_GET_WORKSHEET_USED_RANGE` |
 | Actualizar celdas de fila existente | Composio `EXCEL_UPDATE_RANGE` |
 | Insertar nuevas filas | Composio `EXCEL_UPDATE_RANGE` |
+| Buscar archivo de campaña en MKT CODE | Composio `EXCEL_SEARCH_FILES` |
+| Leer hoja `CALIENTE` de archivo de campaña | Composio `EXCEL_GET_WORKSHEET_USED_RANGE` |
 
 ---
 
@@ -147,9 +151,62 @@ Incrementar `ultimo_id` y `primera_fila_vacia`.
 
 ---
 
+### PASO 4 — Leads calientes por campaña (métrica norte)
+
+Ejecutar **después** de que PASO 2 y PASO 3 hayan terminado de escribir todas las filas.
+
+**4a. Construir mapa de códigos únicos a contar**
+
+De las filas procesadas en la semana actual (y la anterior si aplicó backfill), extraer el set de `Codigo_Producto` únicos que fueron insertados o actualizados en esta ejecución.
+
+**4b. Para cada código único:**
+
+Buscar el archivo de seguimiento en MKT CODE usando Composio `EXCEL_SEARCH_FILES`:
+```
+query: codigo_producto  (ej. "PE.EI.34-26.1")
+drive_id: env MKT_CODE_DRIVE_ID
+```
+
+- Si no se encuentra ningún archivo → `leads_calientes = 0`, continuar.
+- Si hay varios resultados → usar el que tenga el código al inicio del nombre (coincidencia más específica).
+
+**4c. Leer hoja CALIENTE del archivo encontrado**
+
+Usa Composio `EXCEL_GET_WORKSHEET_USED_RANGE`:
+```
+item_id: item_id del archivo encontrado
+drive_id: env MKT_CODE_DRIVE_ID
+worksheet_id: "CALIENTE"
+```
+
+La hoja tiene columna **F = Fecha** con strings en formato `"DD/MM/YYYY HH:MM:SS AM/PM"` (ej. `"25/06/2026 10:44:23 AM"`).
+
+Contar las filas (excluyendo el encabezado) donde la fecha en columna F caiga dentro del rango:
+- Para semana actual: `semana_actual_lunes` ≤ Fecha ≤ `semana_actual_hasta`
+- Para semana anterior (si aplica): `semana_anterior_lunes` ≤ Fecha ≤ `semana_anterior_domingo`
+
+Al parsear la fecha: extraer solo la parte de fecha (`DD/MM/YYYY`) antes de comparar.
+
+**4d. Escribir Leads_Calientes en columna L**
+
+Para cada fila de `REGISTRO_SEMANAL` cuyo `Codigo_Producto` coincide con el código procesado y pertenece al periodo calculado:
+
+Usa Composio `EXCEL_UPDATE_RANGE`:
+```
+item_id: env ONEDRIVE_ITEM_ID
+drive_id: env ONEDRIVE_DRIVE_ID
+worksheet_id: "REGISTRO_SEMANAL"
+address: "L{n}"
+values: [[leads_calientes]]
+```
+
+Escribir de forma secuencial, una celda a la vez. Un mismo valor de leads_calientes aplica a **todas** las filas que comparten el mismo `Codigo_Producto` y semana (porque el archivo de seguimiento es por producto, no por variante de campaña).
+
+---
+
 ## Estructura de filas
 
-Cada fila nueva a insertar tiene 11 valores (columnas A-K):
+Cada fila nueva a insertar tiene 12 valores (columnas A-L):
 
 | Col | Campo | Valor |
 |-----|-------|-------|
@@ -164,10 +221,11 @@ Cada fila nueva a insertar tiene 11 valores (columnas A-K):
 | I | `Conversaciones` | conversaciones iniciadas (entero, 0 para campañas de leads) |
 | J | `CPL_USD` | fórmula `=IF((H{n}+I{n})=0,"-",G{n}/(H{n}+I{n}))` donde n = fila Excel |
 | K | `Comentario` | `""` |
+| L | `Leads_Calientes` | `0` al insertar (se actualiza en PASO 4) |
 
 Escribir con Composio `EXCEL_UPDATE_RANGE`:
 - `worksheet_id`: `REGISTRO_SEMANAL`
-- `address`: `A{primera_fila_vacia}:K{primera_fila_vacia}` (una fila a la vez) o en bloque si son varias filas consecutivas
+- `address`: `A{primera_fila_vacia}:L{primera_fila_vacia}` (una fila a la vez)
 
 ---
 
@@ -180,6 +238,7 @@ Escribir con Composio `EXCEL_UPDATE_RANGE`:
 | `META_AD_ACCOUNT_ID` | ID numérico de la cuenta publicitaria (solo los dígitos, sin `act_`) |
 | `ONEDRIVE_ITEM_ID` | `01EJAD6P26K7XV47MKCNA2NUMJMCTYHSQA` |
 | `ONEDRIVE_DRIVE_ID` | `b!1U4iaBDsVk2MoPFpxkox96PVSF7eIfZPn1_TQQsa_Rux7EmX3JabSbzUbWh20VZS` |
+| `MKT_CODE_DRIVE_ID` | `b!JDzJFFxcZ0i_gjgWsk8jlYN--xjLhhVPsUr6Gl5Fm-d9EsShc690ToWO57RPZpCl` |
 
 ## Resumen final
 
@@ -187,3 +246,4 @@ Imprime al terminar:
 - Semanas procesadas (actual + anterior si aplicó backfill)
 - Filas insertadas vs actualizadas
 - Campañas omitidas (sin código)
+- Leads calientes por código (ej. `PE.EI.34-26.1: 5 calientes`); códigos sin archivo en MKT CODE: listar
