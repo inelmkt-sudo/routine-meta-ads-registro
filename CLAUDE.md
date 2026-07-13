@@ -179,17 +179,21 @@ drive_id: env MKT_CODE_DRIVE_ID
 worksheet_id: "CALIENTE"
 ```
 
-La hoja tiene columna **F = Fecha** con strings en formato fecha + hora (ej. `"25/06/2026 10:44:23 AM"`). El formato de fecha puede variar entre archivos: algunos usan `DD/MM/YYYY`, otros `MM/DD/YYYY`.
+La hoja tiene columna **F = Fecha**, pero el contenido es inconsistente **fila por fila dentro del mismo archivo**:
 
-**Detección automática del formato por archivo:**
+- Algunas filas son **strings** `"DD/MM/YYYY hh:mm:ss AM/PM"` (ej. `"25/06/2026 10:44:23 AM"`).
+- Otras filas son **seriales numéricos de Excel** (ej. `46210.05`). CUIDADO: muchos de estos seriales provienen de fechas americanas `M/DD/YYYY` que Excel malparseó intercambiando día y mes (ej. el lead del 1 de julio escrito `7/01/2026` quedó guardado como serial del **7 de enero**).
 
-Antes de contar, escanear todas las fechas del archivo para detectar el formato predominante:
+**Parseo por fila con desambiguación cronológica** (las filas están en orden cronológico de registro — usar la fecha de la fila anterior como ancla):
 
-1. Para cada fecha, extraer los dos primeros componentes numéricos (A y B de `A/B/YYYY`).
-2. Si en cualquier fila A > 12 → el formato es `DD/MM/YYYY` (el día no puede ser mes).
-3. Si en cualquier fila B > 12 → el formato es `MM/DD/YYYY` (el mes no puede ser día).
-4. Si todas las filas tienen A ≤ 12 y B ≤ 12 (ambiguo) → usar el rango de la semana procesada como desambiguador: interpretar cada fecha en ambos formatos y usar el que produzca una fecha dentro del año 2026 y lo más cercana al rango esperado. Si la interpretación DD/MM da una fecha en el rango de la semana → `DD/MM`; si es MM/DD la que cae en rango → `MM/DD`. Si ninguna cae en rango, preferir la que produce una fecha de 2026.
-5. Aplicar el formato detectado uniformemente a **todas** las filas del archivo.
+1. Mantener `prev` = última fecha válida parseada (inicia en None).
+2. Para cada fila, generar candidatos:
+   - Si el valor es **numérico**: convertir serial → fecha `d` (epoch 1899-12-30). Candidatos: `d` y, si `d.day ≤ 12`, también la fecha con día↔mes intercambiados (`date(d.year, d.day, d.month)`).
+   - Si el valor es **string** `A/B/YYYY`: candidatos `DD/MM` = `date(Y, B, A)` y `MM/DD` = `date(Y, A, B)` (descartar los inválidos).
+3. Elegir el candidato ≥ `prev` más cercano a `prev`. Si ninguno es ≥ `prev`, usar el primer candidato. Si no hay `prev`, usar el primero.
+4. Actualizar `prev` con la fecha elegida y evaluar si cae en el rango semanal.
+
+Este método corrige tanto los strings ambiguos como los seriales con día/mes intercambiados, sin asumir un formato único por archivo.
 
 Una vez detectado el formato, contar las filas (excluyendo el encabezado) donde la fecha caiga dentro del rango:
 - Para semana actual: `semana_actual_lunes` ≤ Fecha ≤ `semana_actual_hasta`
