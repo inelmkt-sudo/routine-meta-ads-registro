@@ -179,13 +179,21 @@ drive_id: env MKT_CODE_DRIVE_ID
 worksheet_id: "CALIENTE"
 ```
 
-La hoja tiene columna **F = Fecha** con strings en formato `"DD/MM/YYYY HH:MM:SS AM/PM"` (ej. `"25/06/2026 10:44:23 AM"`).
+La hoja tiene columna **F = Fecha** con strings en formato fecha + hora (ej. `"25/06/2026 10:44:23 AM"`). El formato de fecha puede variar entre archivos: algunos usan `DD/MM/YYYY`, otros `MM/DD/YYYY`.
 
-Contar las filas (excluyendo el encabezado) donde la fecha en columna F caiga dentro del rango:
+**Detección automática del formato por archivo:**
+
+Antes de contar, escanear todas las fechas del archivo para detectar el formato predominante:
+
+1. Para cada fecha, extraer los dos primeros componentes numéricos (A y B de `A/B/YYYY`).
+2. Si en cualquier fila A > 12 → el formato es `DD/MM/YYYY` (el día no puede ser mes).
+3. Si en cualquier fila B > 12 → el formato es `MM/DD/YYYY` (el mes no puede ser día).
+4. Si todas las filas tienen A ≤ 12 y B ≤ 12 (ambiguo) → usar el rango de la semana procesada como desambiguador: interpretar cada fecha en ambos formatos y usar el que produzca una fecha dentro del año 2026 y lo más cercana al rango esperado. Si la interpretación DD/MM da una fecha en el rango de la semana → `DD/MM`; si es MM/DD la que cae en rango → `MM/DD`. Si ninguna cae en rango, preferir la que produce una fecha de 2026.
+5. Aplicar el formato detectado uniformemente a **todas** las filas del archivo.
+
+Una vez detectado el formato, contar las filas (excluyendo el encabezado) donde la fecha caiga dentro del rango:
 - Para semana actual: `semana_actual_lunes` ≤ Fecha ≤ `semana_actual_hasta`
 - Para semana anterior (si aplica): `semana_anterior_lunes` ≤ Fecha ≤ `semana_anterior_domingo`
-
-Al parsear la fecha: extraer solo la parte de fecha (`DD/MM/YYYY`) antes de comparar.
 
 **4d. Escribir Leads_Calientes en columna L**
 
