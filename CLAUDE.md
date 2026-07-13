@@ -65,11 +65,17 @@ De la respuesta (`.values`), construir en memoria:
 
 ---
 
-### PASO 2 — Verificar y rellenar semana anterior (backfill)
+### PASO 2 — Verificar y rellenar/actualizar semana anterior
 
-**Solo ejecutar si `semana_anterior_iso` NO está en `semanas_registradas`.**
+Hay dos casos:
 
-Si no hay registros de la semana anterior:
+**Caso A — W-1 NO está en `semanas_registradas`** → insertar filas nuevas (la semana anterior nunca fue registrada).
+
+**Caso B — W-1 SÍ está en `semanas_registradas` Y hoy es lunes** → actualizar las filas existentes de W-1 con los datos finales completos (lunes→domingo). La semana anterior ya cerró y los datos son definitivos.
+
+Si W-1 ya está registrada y hoy no es lunes → omitir PASO 2 por completo.
+
+En cualquiera de los dos casos activos:
 
 **2a. Consultar Meta Ads para la semana anterior completa**
 
