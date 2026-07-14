@@ -3,7 +3,7 @@
 ## Objetivo
 Al ejecutarse en cualquier día, registrar en la hoja `REGISTRO_SEMANAL` del Excel de OneDrive la inversión, leads y conversaciones de Meta Ads para la semana actual (lunes → hoy) y, si falta, también la semana anterior completa (lunes → domingo). Una fila por campaña por semana. Campañas de leads (`OUTCOME_LEADS`) registran leads; campañas de WhatsApp (`OUTCOME_ENGAGEMENT`) registran conversaciones iniciadas.
 
-Como métrica norte, también cuenta los **leads calientes** de la semana desde los archivos Excel de seguimiento de cada campaña en la carpeta MKT CODE de OneDrive. Un lead caliente es cualquier registro en la hoja `CALIENTE` de esos archivos cuya fecha caiga dentro del periodo procesado. El conteo se escribe en la columna J (`Leads_Calientes`) de `REGISTRO_SEMANAL`, en cada fila de la semana correspondiente. Cuando un mismo `Codigo_Producto` tiene varias filas de campaña, todas reciben el mismo valor (el archivo MKT CODE es por producto).
+Como métrica norte, también cuenta los **leads calientes** de la semana desde los archivos Excel de seguimiento de cada campaña en la carpeta MKT CODE de OneDrive. Un lead caliente es cualquier registro en la hoja `CALIENTE` de esos archivos cuya fecha caiga dentro del periodo procesado. El conteo se escribe en la columna J (`Leads_Calientes`) de `REGISTRO_SEMANAL`. Cuando un mismo `Codigo_Producto` tiene varias filas de campaña en la misma semana, el conteo se escribe **solo en la primera fila** del grupo; las demás variantes reciben `0` — así la suma de la columna J nunca duplica leads.
 
 ## Reglas
 
@@ -201,7 +201,7 @@ Una vez detectado el formato, contar las filas (excluyendo el encabezado) donde 
 
 **4d. Escribir Leads_Calientes en columna J de REGISTRO_SEMANAL**
 
-Para cada fila de `REGISTRO_SEMANAL` cuyo `Codigo_Producto` coincide con el código procesado y pertenece al periodo calculado, escribir el conteo en la columna J:
+Para cada grupo `Codigo_Producto` + `Semana_ISO` en `REGISTRO_SEMANAL` (solo filas con Canal = "Meta"), escribir el conteo en la columna J **únicamente en la primera fila del grupo** (la de menor número de fila); en todas las demás filas del grupo escribir `0`. Esto evita duplicar leads calientes cuando un código tiene varias variantes de campaña — la suma de la columna J debe dar el total real:
 
 Usa Composio `EXCEL_UPDATE_RANGE`:
 ```
@@ -212,7 +212,7 @@ address: "J{n}"
 values: [[leads_calientes]]
 ```
 
-Escribir de forma secuencial, una celda a la vez. Si el código tiene varias filas de campaña en la semana, todas reciben el mismo valor — es correcto porque el archivo de seguimiento es por producto, no por variante.
+Escribir de forma secuencial, una celda a la vez.
 
 ---
 
