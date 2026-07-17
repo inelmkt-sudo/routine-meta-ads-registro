@@ -225,6 +225,7 @@ Al terminar PASO 4, releer el used range completo de `REGISTRO_SEMANAL` y valida
 1. **Sin filas fantasma**: ninguna fila con valores en G:J pero con A-F vacíos. Si existe, limpiarla con `EXCEL_CLEAR_RANGE` (`applyTo: "Contents"`, rango `A{n}:L{n}`).
 2. **Correspondencia campaña↔datos**: para cada fila de la semana actual (y W-1 si se procesó), el `ID_Campana` (col E) debe corresponder a los valores G/H/I escritos según los datos de Meta consultados en esta ejecución. Comparar contra el mapa en memoria `{id_campana: (spend, leads, conversaciones)}`. Si alguna fila no coincide, reescribir `G{n}:I{n}` con el valor correcto.
 3. **Coherencia de tipo**: campañas `OUTCOME_LEADS` deben tener I=0; campañas `OUTCOME_ENGAGEMENT` deben tener H=0. Si está invertido, corregir.
+3b. **Columna J sin corrimiento**: para cada semana procesada, verificar contra el mapa en memoria `{codigo: leads_calientes}` que: (a) la primera fila de cada grupo código+semana tiene exactamente el conteo calculado en PASO 4, (b) las demás filas del grupo tienen 0, y (c) ningún valor de J quedó en la fila de un código distinto (corrimiento). Antes de escribir cada `J{n}`, releer `D{n}` y confirmar que el código coincide — igual que la regla 10 para G:I. Si hay discrepancia, reescribir toda la columna J de esa semana.
 4. **IDs consecutivos**: la columna A no debe tener saltos ni duplicados. Reportar (no corregir) si se detecta anomalía.
 
 Si tras una corrección la validación sigue fallando, detenerse con mensaje de error claro y exit ≠ 0 (no seguir escribiendo a ciegas).
