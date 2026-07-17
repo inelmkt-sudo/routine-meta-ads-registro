@@ -16,7 +16,9 @@ Como métrica norte, también cuenta los **leads calientes** de la semana desde 
 7. Usa **Meta MCP** para leer datos de campañas. Usa **Composio Excel MCP** para leer y escribir el Excel.
 8. **Escritura secuencial**: nunca escribas múltiples rangos en paralelo al mismo Excel — las escrituras simultáneas causan pérdida de datos. Escribe un bloque, espera confirmación, luego el siguiente.
 9. **Solo campañas 2026+**: el filtro `amount_spent > 0` junto con el `time_range` semanal ya limita a campañas con actividad reciente. No se procesan campañas anteriores a 2026.
-10. **Respetar filas de otros canales**: al leer `filas_existentes`, ignorar para todo propósito de actualización las filas donde columna F (`Canal`) sea distinto de `"Meta"` (ej. `"WhatsApp Masivo"`, `"LinkedIn"`). Esas filas son de entrada manual — no tocarlas, no sobreescribirlas, no usarlas para calcular `ultimo_id` ni `primera_fila_vacia`.
+10. **Verificación anti-corrimiento (obligatoria)**: antes de actualizar `G{n}:I{n}` de una fila existente, leer primero `E{n}` y confirmar que coincide exactamente con el `ID_Campana` de la campaña que se va a escribir. Si no coincide, NO escribir: volver a leer el used range completo, recalcular el número de fila y reintentar. Después de terminar todas las escrituras de una semana, releer el bloque completo de esa semana y validar: (a) cada fila tiene A-F no vacíos, (b) el par E↔G:I corresponde a la campaña correcta según los datos de Meta, (c) no existe ninguna fila con G:I con valores pero A-F vacíos (fila fantasma). Si se detecta una fila fantasma, limpiarla con `EXCEL_CLEAR_RANGE` y corregir la fila que debió recibir esos datos.
+11. **Recalcular fila tras cada inserción**: `primera_fila_vacia` no se debe mantener solo como contador en memoria — después de cada inserción, confirmar con la respuesta de `EXCEL_UPDATE_RANGE` que la fila escrita es la esperada (la respuesta incluye `address`). Si el Excel fue modificado por otro proceso durante la ejecución (used range distinto al inicial), releer el used range antes de seguir escribiendo.
+12. **Respetar filas de otros canales**: al leer `filas_existentes`, ignorar para todo propósito de actualización las filas donde columna F (`Canal`) sea distinto de `"Meta"` (ej. `"WhatsApp Masivo"`, `"LinkedIn"`). Esas filas son de entrada manual — no tocarlas, no sobreescribirlas, no usarlas para calcular `ultimo_id` ni `primera_fila_vacia`.
 
 ## Asignación MCP vs script
 
@@ -141,7 +143,7 @@ Para cada campaña válida, buscar en `filas_existentes` si existe una fila dond
 - Columna E (`ID_Campana`) == `campaign_name` (exacto)
 
 **Si la fila EXISTE → ACTUALIZAR**
-Usa Composio `EXCEL_UPDATE_RANGE` en las celdas G, H e I de esa fila:
+Primero verificar con `EXCEL_GET_RANGE` que `E{n}` == nombre de la campaña (regla 10). Luego usa Composio `EXCEL_UPDATE_RANGE` en las celdas G, H e I de esa fila:
 - `address`: `G{n}:I{n}` (n = número de fila Excel de la coincidencia)
 - `values`: [[spend, leads, conversaciones]]
 
@@ -213,6 +215,19 @@ values: [[leads_calientes]]
 ```
 
 Escribir de forma secuencial, una celda a la vez.
+
+---
+
+### PASO 5 — Verificación final anti-corrimiento
+
+Al terminar PASO 4, releer el used range completo de `REGISTRO_SEMANAL` y validar:
+
+1. **Sin filas fantasma**: ninguna fila con valores en G:J pero con A-F vacíos. Si existe, limpiarla con `EXCEL_CLEAR_RANGE` (`applyTo: "Contents"`, rango `A{n}:L{n}`).
+2. **Correspondencia campaña↔datos**: para cada fila de la semana actual (y W-1 si se procesó), el `ID_Campana` (col E) debe corresponder a los valores G/H/I escritos según los datos de Meta consultados en esta ejecución. Comparar contra el mapa en memoria `{id_campana: (spend, leads, conversaciones)}`. Si alguna fila no coincide, reescribir `G{n}:I{n}` con el valor correcto.
+3. **Coherencia de tipo**: campañas `OUTCOME_LEADS` deben tener I=0; campañas `OUTCOME_ENGAGEMENT` deben tener H=0. Si está invertido, corregir.
+4. **IDs consecutivos**: la columna A no debe tener saltos ni duplicados. Reportar (no corregir) si se detecta anomalía.
+
+Si tras una corrección la validación sigue fallando, detenerse con mensaje de error claro y exit ≠ 0 (no seguir escribiendo a ciegas).
 
 ---
 
