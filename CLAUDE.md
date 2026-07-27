@@ -3,7 +3,7 @@
 ## Objetivo
 Al ejecutarse en cualquier día, registrar en la hoja `REGISTRO_SEMANAL` del Excel de OneDrive la inversión, leads y conversaciones de Meta Ads para la semana actual (lunes → hoy) y, si falta, también la semana anterior completa (lunes → domingo). Una fila por campaña por semana. Campañas de leads (`OUTCOME_LEADS`) registran leads; campañas de WhatsApp (`OUTCOME_ENGAGEMENT`) registran conversaciones iniciadas.
 
-Como métrica norte, también cuenta los **leads calientes** de la semana desde los archivos Excel de seguimiento de cada campaña en la carpeta MKT CODE de OneDrive. Un lead caliente es cualquier registro en la hoja `CALIENTE` de esos archivos cuya fecha caiga dentro del periodo procesado. El conteo se escribe en la columna J (`Leads_Calientes`) de `REGISTRO_SEMANAL`. Cuando un mismo `Codigo_Producto` tiene varias filas de campaña en la misma semana, el conteo se escribe **solo en la primera fila** del grupo; las demás variantes reciben `0` — así la suma de la columna J nunca duplica leads.
+Como métrica norte, también cuenta los **leads calientes** y **leads tibios** de la semana desde los archivos Excel de seguimiento de cada campaña en la carpeta MKT CODE de OneDrive. Un lead caliente/tibio es cualquier registro en la hoja `CALIENTE`/`TIBIO` de esos archivos cuya fecha caiga dentro del periodo procesado. El conteo se escribe en las columnas J (`Leads_Calientes`) y K (`Leads_Tibios`) de `REGISTRO_SEMANAL`. Cuando un mismo `Codigo_Producto` tiene varias filas de campaña en la misma semana, el conteo se escribe **solo en la primera fila** del grupo; las demás variantes reciben `0` — así la suma de las columnas J y K nunca duplica leads.
 
 ## Reglas
 
@@ -19,6 +19,7 @@ Como métrica norte, también cuenta los **leads calientes** de la semana desde 
 10. **Verificación anti-corrimiento (obligatoria)**: antes de actualizar `G{n}:I{n}` de una fila existente, leer primero `E{n}` y confirmar que coincide exactamente con el `ID_Campana` de la campaña que se va a escribir. Si no coincide, NO escribir: volver a leer el used range completo, recalcular el número de fila y reintentar. Después de terminar todas las escrituras de una semana, releer el bloque completo de esa semana y validar: (a) cada fila tiene A-F no vacíos, (b) el par E↔G:I corresponde a la campaña correcta según los datos de Meta, (c) no existe ninguna fila con G:I con valores pero A-F vacíos (fila fantasma). Si se detecta una fila fantasma, limpiarla con `EXCEL_CLEAR_RANGE` y corregir la fila que debió recibir esos datos.
 11. **Recalcular fila tras cada inserción**: `primera_fila_vacia` no se debe mantener solo como contador en memoria — después de cada inserción, confirmar con la respuesta de `EXCEL_UPDATE_RANGE` que la fila escrita es la esperada (la respuesta incluye `address`). Si el Excel fue modificado por otro proceso durante la ejecución (used range distinto al inicial), releer el used range antes de seguir escribiendo.
 12. **Respetar filas de otros canales**: al leer `filas_existentes`, ignorar para todo propósito de actualización las filas donde columna F (`Canal`) sea distinto de `"Meta"` (ej. `"WhatsApp Masivo"`, `"LinkedIn"`). Esas filas son de entrada manual — no tocarlas, no sobreescribirlas, no usarlas para calcular `ultimo_id` ni `primera_fila_vacia`.
+13. **Dos consultas obligatorias a Meta por semana**: para obtener datos completos se requieren SIEMPRE dos llamadas a `ads_get_ad_entities` por cada semana procesada: (a) consulta general sin breakdown para campañas `OUTCOME_LEADS` (obtiene spend + leads), y (b) consulta con `breakdowns: ["publisher_platform"]` y filtro `campaign.name CONTAIN "Whatsapp"` para campañas `OUTCOME_ENGAGEMENT` (obtiene conversaciones). NUNCA confiar en el campo `results` sin breakdown para campañas ENGAGEMENT — devuelve `{}` vacío. Si se omite la segunda consulta, las conversaciones quedarán en 0. Ver pasos 2a-bis y 3a-bis.
 
 ## Asignación MCP vs script
 
@@ -29,7 +30,7 @@ Como métrica norte, también cuenta los **leads calientes** de la semana desde 
 | Actualizar celdas de fila existente | Composio `EXCEL_UPDATE_RANGE` |
 | Insertar nuevas filas | Composio `EXCEL_UPDATE_RANGE` |
 | Buscar archivo de campaña en MKT CODE | Composio `EXCEL_SEARCH_FILES` |
-| Leer hoja `CALIENTE` de archivo de campaña | Composio `EXCEL_GET_WORKSHEET_USED_RANGE` |
+| Leer hojas `CALIENTE` y `TIBIO` de archivo de campaña | Composio `EXCEL_GET_WORKSHEET_USED_RANGE` |
 
 ---
 
@@ -83,7 +84,7 @@ Si W-1 ya está registrada y hoy no es lunes → omitir PASO 2 por completo.
 
 En cualquiera de los dos casos activos:
 
-**2a. Consultar Meta Ads para la semana anterior completa**
+**2a. Consultar Meta Ads para la semana anterior — campañas de LEADS**
 
 Usa Meta MCP `ads_get_ad_entities`:
 ```
@@ -94,14 +95,37 @@ filtering: [{"field": "campaign.amount_spent", "operator": "GREATER_THAN", "valu
 time_range: {"since": "semana_anterior_lunes", "until": "semana_anterior_domingo"}
 ```
 
+De esta consulta extraer spend y leads para campañas `OUTCOME_LEADS`. Para campañas `OUTCOME_ENGAGEMENT`, solo tomar el spend (NO usar `results` ni `lead` — ambos vienen vacíos/null).
+
+**2a-bis. Consultar Meta Ads para la semana anterior — conversaciones WhatsApp (OBLIGATORIO)**
+
+El campo `results` devuelve `{}` vacío para campañas `OUTCOME_ENGAGEMENT` en la consulta sin breakdown. Esta segunda consulta es **obligatoria** para obtener las conversaciones:
+
+```
+ad_account_id: env META_AD_ACCOUNT_ID
+level: "campaign"
+fields: ["id", "name", "objective", "amount_spent", "results"]
+filtering: [
+  {"field": "campaign.name", "operator": "CONTAIN", "value": ["Whatsapp"]},
+  {"field": "campaign.amount_spent", "operator": "GREATER_THAN", "value": ["0"]}
+]
+time_range: {"since": "semana_anterior_lunes", "until": "semana_anterior_domingo"}
+breakdowns: ["publisher_platform"]
+```
+
+Esto devuelve varias filas por campaña (una por plataforma: facebook, instagram, whatsapp). El campo `results.value` viene como `"N (Messaging conversations started)"`. Para cada campaña, sumar el número N de todas las plataformas:
+```
+conversaciones = sum(int(row['results']['value'].split()[0]) for row in rows_de_esta_campana)
+```
+
 **2b. Filtrar y procesar campañas de la semana anterior**
 
 Por cada campaña en los resultados:
-- Si `amount_spent` = 0 y `lead` = 0 y `results` = 0 → omitir
+- Si `amount_spent` = 0 y `lead` = 0 y conversaciones = 0 → omitir
 - Extraer `codigo` con regex `(PE\.EI\.\d+-\d+\.\d+|CE\.EI\.\d+-\d+\.\d+)` del campo `name`
 - Si no hay coincidencia con PE.EI o CE.EI → omitir silenciosamente
 - `id_campana` = `name` completo tal como viene de Meta
-- Si `objective` == `OUTCOME_ENGAGEMENT` → campaña WhatsApp: `leads = 0`, `conversaciones` = valor numérico de `results`
+- Si `objective` == `OUTCOME_ENGAGEMENT` → campaña WhatsApp: `leads = 0`, `conversaciones` = total sumado del paso 2a-bis
 - Si `objective` == `OUTCOME_LEADS` → campaña de leads: `leads` = valor de `lead`, `conversaciones = 0`
 
 **2c. Escribir filas de la semana anterior**
@@ -116,7 +140,7 @@ Actualizar `ultimo_id` y `primera_fila_vacia` a medida que se insertan filas.
 
 ### PASO 3 — Procesar semana actual
 
-**3a. Consultar Meta Ads para la semana actual**
+**3a. Consultar Meta Ads para la semana actual — campañas de LEADS**
 
 Usa Meta MCP `ads_get_ad_entities`:
 ```
@@ -127,13 +151,31 @@ filtering: [{"field": "campaign.amount_spent", "operator": "GREATER_THAN", "valu
 time_range: {"since": "semana_actual_lunes", "until": "semana_actual_hasta"}
 ```
 
+**3a-bis. Consultar Meta Ads para la semana actual — conversaciones WhatsApp (OBLIGATORIO)**
+
+Misma lógica que 2a-bis. Esta consulta es **obligatoria** — sin ella las campañas WhatsApp quedan con 0 conversaciones:
+
+```
+ad_account_id: env META_AD_ACCOUNT_ID
+level: "campaign"
+fields: ["id", "name", "objective", "amount_spent", "results"]
+filtering: [
+  {"field": "campaign.name", "operator": "CONTAIN", "value": ["Whatsapp"]},
+  {"field": "campaign.amount_spent", "operator": "GREATER_THAN", "value": ["0"]}
+]
+time_range: {"since": "semana_actual_lunes", "until": "semana_actual_hasta"}
+breakdowns: ["publisher_platform"]
+```
+
+Para cada campaña, sumar `int(results['value'].split()[0])` de todas las plataformas = total conversaciones.
+
 **3b. Filtrar campañas**
 
 Por cada campaña:
-- Si `amount_spent` = 0 y `lead` = 0 y `results` = 0 → omitir
+- Si `amount_spent` = 0 y `lead` = 0 y conversaciones = 0 → omitir
 - Extraer `codigo` con regex del campo `name` → si no tiene PE.EI o CE.EI → omitir
 - `id_campana` = `name` completo
-- Si `objective` == `OUTCOME_ENGAGEMENT` → campaña WhatsApp: `leads = 0`, `conversaciones` = valor numérico de `results`
+- Si `objective` == `OUTCOME_ENGAGEMENT` → campaña WhatsApp: `leads = 0`, `conversaciones` = total sumado del paso 3a-bis
 - Si `objective` == `OUTCOME_LEADS` → campaña de leads: `leads` = valor de `lead`, `conversaciones = 0`
 
 **3c. Decidir: ¿insertar o actualizar?**
@@ -153,7 +195,7 @@ Incrementar `ultimo_id` y `primera_fila_vacia`.
 
 ---
 
-### PASO 4 — Leads calientes por campaña (métrica norte)
+### PASO 4 — Leads calientes y tibios por campaña (métrica norte)
 
 Ejecutar **después** de que PASO 2 y PASO 3 hayan terminado de escribir todas las filas.
 
@@ -172,13 +214,14 @@ drive_id: env MKT_CODE_DRIVE_ID
 - Si no se encuentra ningún archivo → `leads_calientes = 0`, continuar.
 - Si hay varios resultados → usar el que tenga el código al inicio del nombre (coincidencia más específica).
 
-**4c. Leer hoja CALIENTE del archivo encontrado**
+**4c. Leer hojas CALIENTE y TIBIO del archivo encontrado**
 
-Usa Composio `EXCEL_GET_WORKSHEET_USED_RANGE`:
+Usa Composio `EXCEL_GET_WORKSHEET_USED_RANGE` dos veces (secuencialmente):
 ```
 item_id: item_id del archivo encontrado
 drive_id: env MKT_CODE_DRIVE_ID
-worksheet_id: "CALIENTE"
+worksheet_id: "CALIENTE"   (primera llamada)
+worksheet_id: "TIBIO"      (segunda llamada)
 ```
 
 La hoja tiene columna **F = Fecha**, pero el contenido es inconsistente **fila por fila dentro del mismo archivo**:
@@ -201,20 +244,20 @@ Una vez detectado el formato, contar las filas (excluyendo el encabezado) donde 
 - Para semana actual: `semana_actual_lunes` ≤ Fecha ≤ `semana_actual_hasta`
 - Para semana anterior (si aplica): `semana_anterior_lunes` ≤ Fecha ≤ `semana_anterior_domingo`
 
-**4d. Escribir Leads_Calientes en columna J de REGISTRO_SEMANAL**
+**4d. Escribir Leads_Calientes (col J) y Leads_Tibios (col K) en REGISTRO_SEMANAL**
 
-Para cada grupo `Codigo_Producto` + `Semana_ISO` en `REGISTRO_SEMANAL` (solo filas con Canal = "Meta"), escribir el conteo en la columna J **únicamente en la primera fila del grupo** (la de menor número de fila); en todas las demás filas del grupo escribir `0`. Esto evita duplicar leads calientes cuando un código tiene varias variantes de campaña — la suma de la columna J debe dar el total real:
+Para cada grupo `Codigo_Producto` + `Semana_ISO` en `REGISTRO_SEMANAL` (solo filas con Canal = "Meta"), escribir el conteo en las columnas J y K **únicamente en la primera fila del grupo** (la de menor número de fila); en todas las demás filas del grupo escribir `0`. Esto evita duplicar leads cuando un código tiene varias variantes de campaña — la suma de las columnas J y K debe dar el total real.
 
 Usa Composio `EXCEL_UPDATE_RANGE`:
 ```
 item_id: env ONEDRIVE_ITEM_ID
 drive_id: env ONEDRIVE_DRIVE_ID
 worksheet_id: "REGISTRO_SEMANAL"
-address: "J{n}"
-values: [[leads_calientes]]
+address: "J{n}:K{n}"
+values: [[leads_calientes, leads_tibios]]
 ```
 
-Escribir de forma secuencial, una celda a la vez.
+Escribir de forma secuencial, una fila a la vez.
 
 ---
 
@@ -222,10 +265,10 @@ Escribir de forma secuencial, una celda a la vez.
 
 Al terminar PASO 4, releer el used range completo de `REGISTRO_SEMANAL` y validar:
 
-1. **Sin filas fantasma**: ninguna fila con valores en G:J pero con A-F vacíos. Si existe, limpiarla con `EXCEL_CLEAR_RANGE` (`applyTo: "Contents"`, rango `A{n}:L{n}`).
+1. **Sin filas fantasma**: ninguna fila con valores en G:K pero con A-F vacíos. Si existe, limpiarla con `EXCEL_CLEAR_RANGE` (`applyTo: "Contents"`, rango `A{n}:L{n}`).
 2. **Correspondencia campaña↔datos**: para cada fila de la semana actual (y W-1 si se procesó), el `ID_Campana` (col E) debe corresponder a los valores G/H/I escritos según los datos de Meta consultados en esta ejecución. Comparar contra el mapa en memoria `{id_campana: (spend, leads, conversaciones)}`. Si alguna fila no coincide, reescribir `G{n}:I{n}` con el valor correcto.
-3. **Coherencia de tipo**: campañas `OUTCOME_LEADS` deben tener I=0; campañas `OUTCOME_ENGAGEMENT` deben tener H=0. Si está invertido, corregir.
-3b. **Columna J sin corrimiento**: para cada semana procesada, verificar contra el mapa en memoria `{codigo: leads_calientes}` que: (a) la primera fila de cada grupo código+semana tiene exactamente el conteo calculado en PASO 4, (b) las demás filas del grupo tienen 0, y (c) ningún valor de J quedó en la fila de un código distinto (corrimiento). Antes de escribir cada `J{n}`, releer `D{n}` y confirmar que el código coincide — igual que la regla 10 para G:I. Si hay discrepancia, reescribir toda la columna J de esa semana.
+3. **Coherencia de tipo**: campañas `OUTCOME_LEADS` deben tener I=0; campañas `OUTCOME_ENGAGEMENT` deben tener H=0. Si está invertido, corregir. **Además**: campañas `OUTCOME_ENGAGEMENT` (nombre contiene "Whatsapp") con spend > 0 DEBEN tener I > 0 (conversaciones). Si I=0 para una campaña WhatsApp con spend, es un error — la consulta con breakdown no se ejecutó o no se procesó correctamente. Reejecutar paso 2a-bis/3a-bis y corregir.
+3b. **Columnas J y K sin corrimiento**: para cada semana procesada, verificar contra los mapas en memoria `{codigo: leads_calientes}` y `{codigo: leads_tibios}` que: (a) la primera fila de cada grupo código+semana tiene exactamente los conteos calculados en PASO 4, (b) las demás filas del grupo tienen 0, y (c) ningún valor de J o K quedó en la fila de un código distinto (corrimiento). Antes de escribir cada `J{n}:K{n}`, releer `D{n}` y confirmar que el código coincide — igual que la regla 10 para G:I. Si hay discrepancia, reescribir las columnas J:K de esa semana.
 4. **IDs consecutivos**: la columna A no debe tener saltos ni duplicados. Reportar (no corregir) si se detecta anomalía.
 
 Si tras una corrección la validación sigue fallando, detenerse con mensaje de error claro y exit ≠ 0 (no seguir escribiendo a ciegas).
@@ -234,7 +277,7 @@ Si tras una corrección la validación sigue fallando, detenerse con mensaje de 
 
 ## Estructura de filas
 
-Cada fila nueva a insertar tiene 12 valores (columnas A-L):
+Cada fila nueva a insertar tiene 12 valores (columnas A-L, sin Comentario):
 
 | Col | Campo | Valor |
 |-----|-------|-------|
@@ -248,8 +291,8 @@ Cada fila nueva a insertar tiene 12 valores (columnas A-L):
 | H | `Leads` | leads (entero, 0 para campañas WhatsApp) |
 | I | `Conversaciones` | conversaciones iniciadas (entero, 0 para campañas de leads) |
 | J | `Leads_Calientes` | `0` al insertar (se actualiza en PASO 4) |
-| K | `CPL_USD` | fórmula `=IF((H{n}+I{n})=0,"-",G{n}/(H{n}+I{n}))` donde n = fila Excel |
-| L | `Comentario` | `""` |
+| K | `Leads_Tibios` | `0` al insertar (se actualiza en PASO 4) |
+| L | `CPL_USD` | fórmula `=IF((H{n}+I{n})=0,"-",G{n}/(H{n}+I{n}))` donde n = fila Excel |
 
 Escribir con Composio `EXCEL_UPDATE_RANGE`:
 - `worksheet_id`: `REGISTRO_SEMANAL`
@@ -257,8 +300,8 @@ Escribir con Composio `EXCEL_UPDATE_RANGE`:
 
 Al actualizar filas existentes (PASO 2 Caso B y PASO 3):
 - Spend/leads/conv → `G{n}:I{n}`
-- Leads_Calientes → `J{n}` (en PASO 4, después de procesar MKT CODE)
-- **No tocar K (CPL, es fórmula) ni L (Comentario)**
+- Leads_Calientes → `J{n}`, Leads_Tibios → `K{n}` (en PASO 4, después de procesar MKT CODE)
+- **No tocar L (CPL, es fórmula)**
 
 ---
 
@@ -279,4 +322,4 @@ Imprime al terminar:
 - Semanas procesadas (actual + anterior si aplicó backfill)
 - Filas insertadas vs actualizadas
 - Campañas omitidas (sin código)
-- Leads calientes por código (ej. `PE.EI.34-26.1: 5 calientes`); códigos sin archivo en MKT CODE: listar
+- Leads calientes y tibios por código (ej. `PE.EI.34-26.1: 5 calientes, 9 tibios`); códigos sin archivo en MKT CODE: listar
